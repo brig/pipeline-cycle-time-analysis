@@ -16,13 +16,13 @@ The full CI pipeline completed in approximately **35 minutes end-to-end**: 20m26
 
 1. **86.5% of orchestration time is idle waiting.** Concord spends 17m41s of its 20m26s suspended, waiting for child processes. Each resume cycle wastes ~30s on redundant repo exports and dependency resolution. The parent checks children sequentially even though they run in parallel.
 
-2. **Kubernetes pod startup latency dominates job execution.** Dispatcher job 236757 took 196s from scheduling to pod start, but only 17s of actual compute. This 10:1 overhead ratio means short jobs are bottlenecked by infrastructure, not by application logic.
+3. **Kubernetes pod startup latency dominates job execution.** Dispatcher job 236757 took 196s from scheduling to pod start, but only 17s of actual compute. This 10:1 overhead ratio means short jobs are bottlenecked by infrastructure, not by application logic.
 
-3. **Test setup serialization wastes worker capacity.** Both test suites suffer from sequential setup phases that leave workers idle. Kono Pool-1 wastes 620s of worker capacity on idle threads. Substantiate's setup phase leaves workers 4 and 5 idle for 300+ seconds.
+4. **Test setup serialization wastes worker capacity.** Both test suites suffer from sequential setup phases that leave workers idle. Kono Pool-1 wastes 620s of worker capacity on idle threads. Substantiate's setup phase leaves workers 4 and 5 idle for 300+ seconds.
 
-4. **Polling-based wait patterns overshoot consistently.** Substantiate tests spend 76.8% of aggregate time polling backends at 20s intervals. Each poll cycle can overshoot actual completion by up to 20s, compounding across dozens of tests.
+5. **Polling-based wait patterns overshoot consistently.** Substantiate tests spend 76.8% of aggregate time polling backends at 20s intervals. Each poll cycle can overshoot actual completion by up to 20s, compounding across dozens of tests.
 
-5. **Kono's two ForkJoinPools run sequentially when they could overlap.** Pool-2 waits for Pool-1 to finish despite having no dependency. Running them concurrently would save ~58s (20% of Kono wall-clock time).
+6. **Kono's two ForkJoinPools run sequentially when they could overlap.** Pool-2 waits for Pool-1 to finish despite having no dependency. Running them concurrently would save ~58s (20% of Kono wall-clock time).
 
 ---
 
@@ -68,6 +68,8 @@ WEBAPP      [startup ~warmup~][--- stable 0.3-0.5 CPU, 1.6GB mem -------->
 - **Estimated savings:** 60s
 - **Difficulty:** Low — cache or skip repo export on resume when no source changes occurred.
 - **Priority:** P1 — Pure waste with a straightforward fix.
+>> Saving 60 seconds isn’t possible in this case, because the parent resumes only when one of the child processes finishes. two child processes finishing at different times...
+>> So in the best case, the savings here would be 30 seconds (if resume were completely free)
 
 ### Rank 2: Parallelize Concord Child Checking
 - **Description:** The Concord parent checks children sequentially: it resumes for child c6cbe79e, confirms completion, re-suspends, then later resumes for 806f92a1. If both children are checked in a single resume, the second suspend/resume cycle (with its ~30s overhead) is eliminated entirely.
@@ -75,6 +77,7 @@ WEBAPP      [startup ~warmup~][--- stable 0.3-0.5 CPU, 1.6GB mem -------->
 - **Estimated savings:** 30-45s
 - **Difficulty:** Medium — requires changes to Concord's child-wait logic.
 - **Priority:** P1
+>> same here. two child processes finishing at different times...
 
 ### Rank 3: Reduce K8s Pod Startup Latency
 - **Description:** Dispatcher jobs wait 196s for pod scheduling and container startup before running 17s of actual work. This 10:1 overhead suggests opportunity in pod pre-warming, smaller container images, or a warm pool of dispatcher pods.
